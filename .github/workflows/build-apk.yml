@@ -55,7 +55,7 @@ jobs:
           git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS"
           echo "$DEPOT_TOOLS" >> "$GITHUB_PATH"
           export PATH="$DEPOT_TOOLS:$PATH"
-          fetch --version
+          fetch --help >/dev/null
 
       - name: Fetch Chromium Android source
         shell: bash
