@@ -1,0 +1,22 @@
+name: Build Check
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate workflow files
+        shell: bash
+        run: |
+          test -f .github/workflows/build-apk.yml
+          test -f README.md
+          echo "Build configuration is present."
+          
