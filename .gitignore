@@ -1,0 +1,5 @@
+out/
+depot_tools/
+chromium/
+.gclient*
+*.log
