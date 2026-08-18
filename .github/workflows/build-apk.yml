@@ -1,0 +1,148 @@
+name: Build Developer APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      chromium_revision:
+        description: "Chromium Git revision/branch (blank = main)"
+        required: false
+        default: "main"
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: soul-browser-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Chromium Android builds need a large Linux machine.
+    # Change this label to the largest Linux runner available to your account.
+    runs-on: ubuntu-24.04
+
+    env:
+      CHROMIUM_REVISION: ${{ inputs.chromium_revision || 'main' }}
+      OUT_DIR: out/SoulBrowser
+      DEPOT_TOOLS: ${{ github.workspace }}/depot_tools
+
+    steps:
+      - name: Checkout Soul Browser build files
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free disk space
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android/sdk/ndk || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          df -h
+
+      - name: Install host dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git python3 curl unzip xvfb
+
+      - name: Checkout official depot_tools
+        shell: bash
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS"
+          echo "$DEPOT_TOOLS" >> "$GITHUB_PATH"
+          export PATH="$DEPOT_TOOLS:$PATH"
+          fetch --version
+
+      - name: Fetch Chromium Android source
+        shell: bash
+        run: |
+          export PATH="$DEPOT_TOOLS:$PATH"
+          mkdir -p "$RUNNER_TEMP/chromium"
+          cd "$RUNNER_TEMP/chromium"
+
+          # Official Chromium checkout command.
+          fetch --nohooks android
+
+          cd src
+          if [ "$CHROMIUM_REVISION" != "main" ]; then
+            git fetch --depth 1 origin "$CHROMIUM_REVISION"
+            git checkout FETCH_HEAD
+          fi
+
+          gclient sync --nohooks
+          gclient runhooks
+
+      - name: Install Chromium Android dependencies
+        shell: bash
+        working-directory: ${{ runner.temp }}/chromium/src
+        run: |
+          sudo build/install-build-deps.sh --android
+          gclient runhooks
+
+      - name: Apply Soul Browser patches
+        shell: bash
+        working-directory: ${{ runner.temp }}/chromium/src
+        run: |
+          shopt -s nullglob
+          patches=("$GITHUB_WORKSPACE"/patches/*.patch)
+          if [ "${#patches[@]}" -eq 0 ]; then
+            echo "No local patches found; building Chromium public APK."
+            exit 0
+          fi
+          for patch in "${patches[@]}"; do
+            echo "Applying $patch"
+            git apply --check "$patch"
+            git apply "$patch"
+          done
+
+      - name: Configure GN
+        shell: bash
+        working-directory: ${{ runner.temp }}/chromium/src
+        run: |
+          mkdir -p "$OUT_DIR"
+          cat > "$OUT_DIR/args.gn" <<'EOF'
+          target_os = "android"
+          target_cpu = "arm64"
+          is_component_build = false
+          is_official_build = false
+          symbol_level = 1
+          blink_symbol_level = 0
+          use_remoteexec = false
+          EOF
+          gn args "$OUT_DIR" --list >/dev/null
+
+      - name: Build chrome_public_apk
+        shell: bash
+        working-directory: ${{ runner.temp }}/chromium/src
+        run: |
+          autoninja -C "$OUT_DIR" chrome_public_apk
+
+      - name: Locate and rename APK
+        id: apk
+        shell: bash
+        working-directory: ${{ runner.temp }}/chromium/src
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          apk="$(find "$OUT_DIR" -type f -name '*.apk' | head -n 1)"
+          test -n "$apk"
+          cp "$apk" "$GITHUB_WORKSPACE/artifacts/SoulBrowser-developer-arm64.apk"
+          sha256sum "$GITHUB_WORKSPACE/artifacts/SoulBrowser-developer-arm64.apk"             > "$GITHUB_WORKSPACE/artifacts/SoulBrowser-developer-arm64.apk.sha256"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: soul-browser-developer-apk
+          path: artifacts/*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/SoulBrowser-developer-arm64.apk
+            artifacts/SoulBrowser-developer-arm64.apk.sha256

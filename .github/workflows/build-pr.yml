@@ -19,4 +19,3 @@ jobs:
           test -f .github/workflows/build-apk.yml
           test -f README.md
           echo "Build configuration is present."
-          
